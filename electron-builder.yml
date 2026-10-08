@@ -1,0 +1,23 @@
+appId: com.sdaiatec.azdo-pr-viewer
+productName: AD Finder
+copyright: Copyright © 2026 MRC
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+win:
+  target:
+    - nsis
+    - portable
+nsis:
+  # Nombre propio por target: si nsis y portable comparten artifactName, el segundo
+  # sobrescribe al primero y solo queda un .exe.
+  artifactName: AD-Finder-Setup-${version}.${ext}
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+portable:
+  artifactName: AD-Finder-${version}-portable.${ext}

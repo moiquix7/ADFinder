@@ -1,0 +1,39 @@
+{
+  "name": "azdo-pr-viewer",
+  "version": "1.2.5",
+  "description": "Visor de escritorio de Pull Requests por Work Item de Azure DevOps (sda-iatec / Sda.Aasi.Net)",
+  "main": "./out/main/index.js",
+  "author": "MRC",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "tsc --noEmit -p tsconfig.json && electron-vite build",
+    "preview": "electron-vite preview",
+    "dist": "npm run build && electron-builder --win --publish never",
+    "dist:dir": "npm run build && electron-builder --win --dir --publish never",
+    "icon": "electron scripts/render-icon.cjs"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^2.16.2",
+    "marked": "^15.0.12"
+  },
+  "devDependencies": {
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@types/node": "^20.14.10",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^31.3.1",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.3.5"
+  },
+  "volta": {
+    "node": "20.20.2",
+    "npm": "10.9.9"
+  }
+}
