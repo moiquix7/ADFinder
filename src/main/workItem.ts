@@ -1,5 +1,5 @@
 import { ORGANIZATION, PROJECT, WEB_HOST } from './config'
-import { api, fetchBinary, identity } from './http'
+import { api, fetchBinary, identity, requestScope } from './http'
 import { isMarkdownFormat, looksLikeMarkdown, markdownToHtml } from './markdown'
 import type {
   AttachmentInfo,
@@ -24,9 +24,14 @@ interface FieldDefinition {
 
 let definitions: Promise<Map<string, FieldDefinition>> | null = null
 
-/** Nombres y tipos de todos los campos de la organización; se piden una vez por sesión. */
+/**
+ * Nombres y tipos de todos los campos de la organización; se piden una vez por sesión.
+ * La descarga va fuera de `requestScope`: la promesa se comparte, y cancelar la búsqueda que la
+ * inició no debe abortarla (se volvería a descargar en cada pulsación).
+ */
 function fieldDefinitions(): Promise<Map<string, FieldDefinition>> {
-  definitions ??= api<{ value: FieldDefinition[] }>('/_apis/wit/fields')
+  definitions ??= requestScope
+    .exit(() => api<{ value: FieldDefinition[] }>('/_apis/wit/fields'))
     .then((result) => new Map(result.value.map((field) => [field.referenceName, field])))
     .catch(() => {
       // Sin definiciones se usan nombres derivados; se reintenta en la siguiente carga.
@@ -34,6 +39,15 @@ function fieldDefinitions(): Promise<Map<string, FieldDefinition>> {
       return new Map<string, FieldDefinition>()
     })
   return definitions
+}
+
+/** Campo cuyo nombre visible es `name` (sin distinguir mayúsculas ni espacios), o null si no existe. */
+export async function findFieldByName(name: string): Promise<{ referenceName: string; type: string } | null> {
+  const key = (text: string) => text.replace(/\s+/g, '').toLowerCase()
+  for (const field of (await fieldDefinitions()).values()) {
+    if (key(field.name) === key(name)) return { referenceName: field.referenceName, type: field.type }
+  }
+  return null
 }
 
 /** `Microsoft.VSTS.Common.ValueArea` → `Value Area` cuando no hay definición. */

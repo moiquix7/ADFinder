@@ -1,6 +1,6 @@
 import { PROJECT, WEB_HOST } from './config'
 import { api, AzdoHttpError, identity, isNotFound } from './http'
-import { readWorkItemDetail } from './workItem'
+import { findFieldByName, readWorkItemDetail } from './workItem'
 import { scopedSearch, titlePatternMatcher, wildcardSegments } from '../shared/query'
 import type {
   CommitSummary,
@@ -203,6 +203,47 @@ async function searchTitlePattern(
     workItems: hasMore ? workItems.slice(0, limit!) : workItems,
     hasMore,
     truncated: limit === null && ids.length >= WIQL_MAX_RESULTS
+  }
+}
+
+/** Tipos de work item que tienen el campo External Reference. */
+const EXTERNAL_REFERENCE_TYPES = ['Failure', 'Issue', 'Feature', 'User Story', 'Bug']
+/** Nombre visible del campo; su nombre de referencia se resuelve con las definiciones de campos. */
+const EXTERNAL_REFERENCE_FIELD_NAME = 'External Reference'
+
+/**
+ * Busca work items cuyo External Reference es exactamente `reference`, entre los tipos que
+ * tienen ese campo y que el filtro no excluye.
+ */
+async function searchExternalReference(
+  reference: string,
+  scope: SearchScope,
+  limit: number | null
+): Promise<{ workItems: WorkItemSummary[]; hasMore: boolean; truncated: boolean; notes: string[] }> {
+  const none = { workItems: [], hasMore: false, truncated: false }
+  const field = await findFieldByName(EXTERNAL_REFERENCE_FIELD_NAME)
+  if (!field) {
+    return { ...none, notes: [`No se encontró el campo «${EXTERNAL_REFERENCE_FIELD_NAME}» en la organización.`] }
+  }
+  const types = EXTERNAL_REFERENCE_TYPES.filter((type) => scope.workItemTypes.includes(type))
+  if (types.length === 0) {
+    return {
+      ...none,
+      notes: [`El filtro excluye todos los tipos con External Reference (${EXTERNAL_REFERENCE_TYPES.join(', ')}).`]
+    }
+  }
+
+  // Un campo numérico se compara como número; uno de texto, como cadena.
+  const value = field.type === 'integer' || field.type === 'double' ? reference : `'${wiqlLiteral(reference)}'`
+  const ids = (
+    await runWiql(`[${field.referenceName}] = ${value}`, types, limit === null ? WIQL_MAX_RESULTS : limit + 1)
+  ).map((w) => w.id)
+  const hasMore = limit !== null && ids.length > limit
+  return {
+    workItems: await getWorkItemSummaries(hasMore ? ids.slice(0, limit) : ids),
+    hasMore,
+    truncated: limit === null && ids.length >= WIQL_MAX_RESULTS,
+    notes: []
   }
 }
 
@@ -810,6 +851,23 @@ export async function search(term: string, options: SearchOptions): Promise<Sear
       const limit = options.allWorkItems ? null : DEFAULT_WORK_ITEM_LIMIT
       const { workItems, hasMore, truncated } = await searchTitlePattern(query.pattern, scope.workItemTypes, limit)
       return { kind: query.kind, ...empty, workItems, hasMoreWorkItems: hasMore, notes: truncatedNote(truncated) }
+    }
+
+    case 'externalReference': {
+      if (!query.reference) {
+        // Mientras se escribe el número se van descargando las definiciones de campos.
+        void findFieldByName(EXTERNAL_REFERENCE_FIELD_NAME)
+        return { kind: query.kind, ...empty, notes: ['Escribe el número de External Reference.'] }
+      }
+      const limit = options.allWorkItems ? null : DEFAULT_WORK_ITEM_LIMIT
+      const { workItems, hasMore, truncated, notes } = await searchExternalReference(query.reference, scope, limit)
+      return {
+        kind: query.kind,
+        ...empty,
+        workItems,
+        hasMoreWorkItems: hasMore,
+        notes: [...truncatedNote(truncated), ...notes]
+      }
     }
 
     case 'workItemId': {

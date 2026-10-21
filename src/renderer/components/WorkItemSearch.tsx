@@ -7,7 +7,12 @@ import { formatAbsolute, formatRelative, normalizeText } from '../lib/format'
 import { Highlight } from '../lib/highlight'
 import { typeStyle } from '../lib/workItemType'
 import { DEFAULT_FILTER, SearchFilter, toScope, type FilterState } from './SearchFilter'
-import { scopedSearch, type SearchQuery } from '../../shared/query'
+import {
+  EXTERNAL_REFERENCE_PREFIX,
+  externalReferenceValue,
+  scopedSearch,
+  type SearchQuery
+} from '../../shared/query'
 import type { CommitSummary, SearchResult, WorkItemSummary } from '../../shared/types'
 
 interface WorkItemSearchProps {
@@ -21,7 +26,7 @@ interface WorkItemSearchProps {
 
 const DEBOUNCE_MS = 400
 /** Tras este tiempo buscando se pregunta si se quiere seguir esperando o cancelar. */
-const SLOW_SEARCH_MS = 30_000
+const SLOW_SEARCH_MS = 60_000
 
 const PAGE_SIZE_KEY = 'workItemSearch.pageSize'
 const DEFAULT_PAGE_SIZE = 25
@@ -221,6 +226,43 @@ export function WorkItemSearch({ hidden, selectedId, onSelect, workItemTypes }: 
   const query = scopedSearch(term, filter)
   const badge = kindLabel(query)
 
+  // `ExternalReference:` se muestra como token aparte y el input solo contiene el número.
+  const externalReference = externalReferenceValue(term)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const tokenRef = useRef<HTMLSpanElement>(null)
+  /** Sangría del texto del input para que empiece justo después del token. */
+  const [tokenIndent, setTokenIndent] = useState(0)
+  const hasToken = externalReference !== null
+
+  // Se vuelve a medir si el token cambia de tamaño (p. ej. cuando termina de cargar la fuente).
+  useLayoutEffect(() => {
+    const token = tokenRef.current
+    if (!hasToken || !token) {
+      setTokenIndent(0)
+      return
+    }
+    const measure = () => setTokenIndent(token.offsetLeft + token.offsetWidth + 8)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(token)
+    return () => observer.disconnect()
+  }, [hasToken])
+
+  const changeTerm = (value: string) => {
+    if (externalReference !== null) {
+      setTerm(EXTERNAL_REFERENCE_PREFIX + value.replace(/\D/g, ''))
+      return
+    }
+    // Al escribir (o pegar) la palabra reservada se convierte en token; lo que sigue, solo dígitos.
+    const reference = externalReferenceValue(value)
+    setTerm(reference !== null ? EXTERNAL_REFERENCE_PREFIX + reference : value)
+  }
+
+  const removeExternalReference = () => {
+    setTerm(externalReference ?? '')
+    inputRef.current?.focus()
+  }
+
   useEffect(() => {
     const trimmed = term.trim()
     if (trimmed.length === 0 || !scope) {
@@ -232,6 +274,7 @@ export function WorkItemSearch({ hidden, selectedId, onSelect, workItemTypes }: 
     }
 
     // Un número se busca casi de inmediato; texto libre y SHA esperan al debounce.
+    // External Reference también espera: es coincidencia exacta y los dígitos a medio escribir no encuentran nada.
     const kind = scopedSearch(trimmed, scope).kind
     // `#` y `!` solos también esperan: suelen ser el inicio de `#123` o `!123`.
     const delay = kind === 'workItemId' || kind === 'pullRequestId' || kind === 'number' ? 150 : DEBOUNCE_MS
@@ -387,15 +430,52 @@ export function WorkItemSearch({ hidden, selectedId, onSelect, workItemTypes }: 
             <span className="field__icon">
               <SearchIcon />
             </span>
+            {externalReference !== null && (
+              <span className="search-token" ref={tokenRef} title="Busca por el campo External Reference">
+                {EXTERNAL_REFERENCE_PREFIX}
+                <button
+                  className="search-token__remove"
+                  onClick={removeExternalReference}
+                  aria-label="Quitar ExternalReference:"
+                  title="Quitar ExternalReference:"
+                >
+                  <CloseIcon />
+                </button>
+              </span>
+            )}
             <input
+              ref={inputRef}
               className={`input${badge ? ' input--badge' : ''}`}
+              style={tokenIndent ? { paddingLeft: tokenIndent } : undefined}
               type="search"
-              value={term}
+              value={externalReference ?? term}
               autoFocus
               spellCheck={false}
-              onChange={(e) => setTerm(e.target.value)}
-              placeholder="Id, título, descripción, colaborador, !PR o SHA…"
-              aria-label="Buscar work item, pull request o commit"
+              inputMode={externalReference !== null ? 'numeric' : undefined}
+              onChange={(e) => changeTerm(e.target.value)}
+              onKeyDown={(e) => {
+                // Retroceso al inicio del número quita el token, como en un campo de etiquetas.
+                const input = e.currentTarget
+                if (
+                  e.key === 'Backspace' &&
+                  externalReference !== null &&
+                  input.selectionStart === 0 &&
+                  input.selectionEnd === 0
+                ) {
+                  e.preventDefault()
+                  removeExternalReference()
+                }
+              }}
+              placeholder={
+                externalReference !== null
+                  ? 'Número de External Reference…'
+                  : 'Id, título, descripción, colaborador, !PR o SHA…'
+              }
+              aria-label={
+                externalReference !== null
+                  ? 'Número de External Reference'
+                  : 'Buscar work item, pull request o commit'
+              }
             />
             {badge && <span className="field__badge">{badge}</span>}
           </div>
@@ -432,6 +512,8 @@ export function WorkItemSearch({ hidden, selectedId, onSelect, workItemTypes }: 
                   ? 'Buscando en los títulos de work items…'
                   : query.kind === 'commit'
                     ? 'Buscando el commit en los repositorios…'
+                    : query.kind === 'externalReference'
+                      ? 'Buscando por External Reference…'
                     : query.kind === 'text' && filter.attachments
                       ? 'Buscando… (revisando adjuntos)'
                       : 'Buscando…'}
@@ -509,6 +591,10 @@ export function WorkItemSearch({ hidden, selectedId, onSelect, workItemTypes }: 
                   solo títulos de work item; <code>%</code> es comodín (<code>login%</code> empieza por,{' '}
                   <code>%login</code> termina en, <code>login%error</code> ambos en orden)
                 </span>
+              </li>
+              <li>
+                <code>ExternalRef.</code>{' '}
+                <span>Typea el prefijo ExternalReference para activar busqueda solo en ese campo.</span>
               </li>
               <li>
                 <code>login</code>{' '}

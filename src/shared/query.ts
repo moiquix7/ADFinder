@@ -11,6 +11,7 @@ import type { SearchScope } from './types'
  * - `123`             → ambiguo: work item y pull request con ese número
  * - `login%error`     → solo títulos de work item; `%` es comodín (`%texto%` contiene, `texto%` empieza por)
  * - `a1b2c3d…`        → commit (7–40 caracteres hex con letras y dígitos), o `sha:`/`commit:` + hex
+ * - `ExternalReference:123` → work items cuyo campo External Reference es ese número
  * - cualquier otro    → texto libre sobre título, colaborador y descripción
  */
 export type SearchQuery =
@@ -19,10 +20,24 @@ export type SearchQuery =
   | { kind: 'commit'; sha: string }
   | { kind: 'text'; text: string }
   | { kind: 'titlePattern'; pattern: string }
+  | { kind: 'externalReference'; reference: string }
+
+/** Palabra reservada que limita la búsqueda al campo External Reference. */
+export const EXTERNAL_REFERENCE_PREFIX = 'ExternalReference:'
+
+const EXTERNAL_REFERENCE_REGEX = /^externalreference\s*:(.*)$/is
+
+/** Lo escrito tras `ExternalReference:` (solo dígitos), o null si el término no empieza por la palabra reservada. */
+export function externalReferenceValue(term: string): string | null {
+  const match = EXTERNAL_REFERENCE_REGEX.exec(term.trimStart())
+  return match ? match[1].replace(/\D/g, '') : null
+}
 
 export function parseSearch(term: string): SearchQuery {
   const trimmed = term.trim()
   if (!trimmed) return { kind: 'empty' }
+  const reference = externalReferenceValue(trimmed)
+  if (reference !== null) return { kind: 'externalReference', reference }
   if (trimmed === '!') return { kind: 'allPullRequests' }
   if (trimmed === '#') return { kind: 'parentWorkItems' }
   if (trimmed.includes('%')) return { kind: 'titlePattern', pattern: trimmed }
