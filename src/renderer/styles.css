@@ -359,6 +359,44 @@ code {
   padding-right: 120px;
 }
 
+/* Palabra reservada `ExternalReference:` dentro del campo de búsqueda. */
+.search-token {
+  position: absolute;
+  left: 30px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--on-accent);
+  background: var(--accent);
+  white-space: nowrap;
+}
+
+.search-token__remove {
+  display: inline-flex;
+  padding: 1px;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.search-token__remove:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--on-accent) 20%, transparent);
+}
+
+.search-token__remove svg {
+  width: 12px;
+  height: 12px;
+}
+
 .input::placeholder {
   color: var(--text-faint);
 }

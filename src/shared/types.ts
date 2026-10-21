@@ -190,6 +190,7 @@ export type SearchKind =
   | 'allPullRequests'
   | 'parentWorkItems'
   | 'titlePattern'
+  | 'externalReference'
 
 export interface SearchResult {
   kind: SearchKind
