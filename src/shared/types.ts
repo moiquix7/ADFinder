@@ -63,6 +63,8 @@ export interface FieldValue {
   /** Texto ya listo para mostrar (fecha ISO, nombre visible, etc.). En `html`, el HTML original. */
   value: string
   imageUrl?: string | null
+  /** Enlace externo al que lleva el valor (p. ej. External Reference → IssueTrack). */
+  url?: string
 }
 
 export interface FieldGroup {
@@ -286,6 +288,8 @@ export interface AzdoApi {
   /** Abre el Explorador con el archivo seleccionado. */
   showItemInFolder(path: string): Promise<void>
   openExternal(url: string): Promise<void>
+  /** Avisa cuando se pulsa Ctrl+R (búsqueda por External Reference). Devuelve la función para dejar de escuchar. */
+  onExternalReferenceShortcut(cb: () => void): () => void
   theme: {
     /** Tema con el que arrancó la ventana; es síncrono para pintar sin parpadeo. */
     initial: ThemeMode
