@@ -57,6 +57,17 @@ export default function App() {
     }
   }, [back, goForward])
 
+  // Ctrl+R: búsqueda por External Reference. En formato widget se vuelve antes a la lista.
+  const [externalReferenceRequest, setExternalReferenceRequest] = useState(0)
+  useEffect(
+    () =>
+      window.azdo.onExternalReferenceShortcut(() => {
+        if (!wide && selected) close()
+        setExternalReferenceRequest((count) => count + 1)
+      }),
+    [wide, selected, close]
+  )
+
   const signOut = async () => {
     await window.azdo.auth.signOut()
     close()
@@ -97,6 +108,7 @@ export default function App() {
               selectedId={selected?.id ?? null}
               onSelect={navigation.open}
               workItemTypes={config?.workItemTypes ?? null}
+              externalReferenceRequest={externalReferenceRequest}
             />
             {showDetail && (
               <WorkItemPanel

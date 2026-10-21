@@ -22,6 +22,8 @@ interface WorkItemSearchProps {
   onSelect: (workItem: WorkItemSummary) => void
   /** Tipos de work item configurados; null mientras carga la configuración. */
   workItemTypes: string[] | null
+  /** Cambia con cada Ctrl+R: deja el campo listo para buscar por External Reference. */
+  externalReferenceRequest: number
 }
 
 const DEBOUNCE_MS = 400
@@ -192,7 +194,13 @@ function SectionTitle({
   )
 }
 
-export function WorkItemSearch({ hidden, selectedId, onSelect, workItemTypes }: WorkItemSearchProps) {
+export function WorkItemSearch({
+  hidden,
+  selectedId,
+  onSelect,
+  workItemTypes,
+  externalReferenceRequest
+}: WorkItemSearchProps) {
   const [term, setTerm] = useState('')
   const [result, setResult] = useState<SearchResult | null>(null)
   const [loading, setLoading] = useState(false)
@@ -257,6 +265,12 @@ export function WorkItemSearch({ hidden, selectedId, onSelect, workItemTypes }: 
     const reference = externalReferenceValue(value)
     setTerm(reference !== null ? EXTERNAL_REFERENCE_PREFIX + reference : value)
   }
+
+  useEffect(() => {
+    if (externalReferenceRequest === 0) return
+    setTerm(EXTERNAL_REFERENCE_PREFIX)
+    inputRef.current?.focus()
+  }, [externalReferenceRequest])
 
   const removeExternalReference = () => {
     setTerm(externalReference ?? '')

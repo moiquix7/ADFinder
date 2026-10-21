@@ -1591,6 +1591,28 @@ code {
   white-space: pre-wrap;
 }
 
+/* Valor de campo que abre un enlace externo (p. ej. External Reference → IssueTrack). */
+.field-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  cursor: pointer;
+}
+
+.field-link:hover {
+  text-decoration: underline;
+}
+
+.field-link svg {
+  width: 12px;
+  height: 12px;
+}
+
 .field-value--path {
   font-family: var(--mono);
   font-size: 12px;

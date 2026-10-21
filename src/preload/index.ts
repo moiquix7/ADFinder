@@ -49,6 +49,11 @@ const api: AzdoApi = {
     ipcRenderer.invoke('attachment:download', url, fileName) as Promise<IpcResult<string | null>>,
   showItemInFolder: (path) => ipcRenderer.invoke('shell:showItemInFolder', path) as Promise<void>,
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url) as Promise<void>,
+  onExternalReferenceShortcut: (cb) => {
+    const listener = () => cb()
+    ipcRenderer.on('shortcut:externalReference', listener)
+    return () => ipcRenderer.removeListener('shortcut:externalReference', listener)
+  },
   theme: {
     initial: initialTheme,
     set: (mode) => ipcRenderer.invoke('theme:set', mode) as Promise<void>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Avatar } from './Avatar'
-import { CheckIcon, CopyIcon } from './Icons'
+import { CheckIcon, CopyIcon, ExternalIcon } from './Icons'
 import { RichHtml } from './RichHtml'
 import { relatedPullRequests } from './WorkItemRelatedLinks'
 import { formatAbsolute, formatRelative, formatSize } from '../lib/format'
@@ -91,6 +91,15 @@ function CopyDetailsButton({ detail }: { detail: WorkItemDetail }) {
 }
 
 function FieldView({ field }: { field: FieldValue }) {
+  if (field.url) {
+    const url = field.url
+    return (
+      <button className="field-link" onClick={() => window.azdo.openExternal(url)} title={url}>
+        {field.value}
+        <ExternalIcon />
+      </button>
+    )
+  }
   switch (field.kind) {
     case 'identity':
       return (

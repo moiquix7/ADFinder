@@ -442,6 +442,9 @@ function parseRelatedLink(relation: RawRelation): RawRelatedLink {
 
 /* ---------- Detalle ---------- */
 
+/** Ficha de IssueTrack a la que enlaza un External Reference numérico (se le añade el número). */
+const ISSUE_TRACK_URL = 'https://issuetrack.nadcloud.net/WorkItem/Details?id='
+
 interface RawWorkItem {
   id: number
   fields: Record<string, unknown>
@@ -481,6 +484,20 @@ export async function readWorkItemDetail(raw: RawWorkItem): Promise<WorkItemExtr
     const fields = group.refs.map(toField).filter((field): field is FieldValue => field !== null)
     for (const field of fields) used.add(field.refName)
     if (fields.length > 0) groups.push({ title: group.title, fields })
+  }
+
+  // External Reference es un campo personalizado: se localiza por nombre y se muestra en «Estado».
+  const externalReference = [...defs.values()].find(
+    (def) => def.name.replace(/\s+/g, '').toLowerCase() === 'externalreference'
+  )
+  const externalField = externalReference ? toField(externalReference.referenceName) : null
+  if (externalField) {
+    used.add(externalField.refName)
+    const reference = externalField.value.trim()
+    if (/^\d+$/.test(reference)) externalField.url = `${ISSUE_TRACK_URL}${reference}`
+    const status = groups.find((group) => group.title === 'Estado')
+    if (status) status.fields.push(externalField)
+    else groups.unshift({ title: 'Estado', fields: [externalField] })
   }
 
   const richText: FieldValue[] = []

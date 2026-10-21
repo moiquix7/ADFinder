@@ -103,6 +103,15 @@ function createWindow(): BrowserWindow {
   const reveal = () => {
     if (!window.isDestroyed() && !window.isVisible()) window.show()
   }
+  // Ctrl+R abre la búsqueda por External Reference. Se intercepta aquí porque el menú por
+  // defecto de Electron recarga la página con ese atajo (Ctrl+Shift+R sigue recargando).
+  window.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !input.control || input.shift || input.alt || input.meta) return
+    if (input.key.toLowerCase() !== 'r') return
+    event.preventDefault()
+    window.webContents.send('shortcut:externalReference')
+  })
+
   // Mantiene nombre + versión: sin esto, el <title> del HTML lo sustituye al cargar.
   window.on('page-title-updated', (event) => event.preventDefault())
 
