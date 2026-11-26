@@ -10,6 +10,7 @@ import { DEFAULT_FILTER, SearchFilter, toScope, type FilterState } from './Searc
 import {
   EXTERNAL_REFERENCE_PREFIX,
   externalReferenceValue,
+  sanitizeExternalReference,
   scopedSearch,
   type SearchQuery
 } from '../../shared/query'
@@ -95,6 +96,8 @@ function kindLabel(query: SearchQuery): string | null {
       return 'Título %'
     case 'commit':
       return 'Commit'
+    case 'multiple':
+      return `${query.terms.length} valores`
     default:
       return null
   }
@@ -120,6 +123,11 @@ function WorkItemRow({
           {item.type}
         </span>
         <span className="chip chip--neutral">{item.state}</span>
+        {item.externalReference && (
+          <span className="wi__extref" title={`External Reference: ${item.externalReference}`}>
+            Ext. Ref. <strong>{item.externalReference}</strong>
+          </span>
+        )}
       </div>
       <div className="wi__title">
         <Highlight text={item.title} needle={highlight} />
@@ -258,10 +266,11 @@ export function WorkItemSearch({
 
   const changeTerm = (value: string) => {
     if (externalReference !== null) {
-      setTerm(EXTERNAL_REFERENCE_PREFIX + value.replace(/\D/g, ''))
+      setTerm(EXTERNAL_REFERENCE_PREFIX + sanitizeExternalReference(value))
       return
     }
-    // Al escribir (o pegar) la palabra reservada se convierte en token; lo que sigue, solo dígitos.
+    // Al escribir (o pegar) la palabra reservada se convierte en token; lo que sigue, solo dígitos
+    // (y comas para buscar varios números).
     const reference = externalReferenceValue(value)
     setTerm(reference !== null ? EXTERNAL_REFERENCE_PREFIX + reference : value)
   }
@@ -482,8 +491,8 @@ export function WorkItemSearch({
               }}
               placeholder={
                 externalReference !== null
-                  ? 'Número de External Reference…'
-                  : 'Id, título, descripción, colaborador, !PR o SHA…'
+                  ? 'Número(s) de External Reference, separados por coma…'
+                  : 'Id, título, descripción, colaborador, !PR o SHA (varios, separados por coma)…'
               }
               aria-label={
                 externalReference !== null
@@ -528,6 +537,8 @@ export function WorkItemSearch({
                     ? 'Buscando el commit en los repositorios…'
                     : query.kind === 'externalReference'
                       ? 'Buscando por External Reference…'
+                    : query.kind === 'multiple'
+                      ? `Buscando ${query.terms.length} valores…`
                     : query.kind === 'text' && filter.attachments
                       ? 'Buscando… (revisando adjuntos)'
                       : 'Buscando…'}

@@ -19,6 +19,8 @@ export interface WorkItemSummary {
   assignedTo: string | null
   assignedToImageUrl: string | null
   changedDate: string | null
+  /** Campo External Reference (número de IssueTrack), si el tipo lo tiene y tiene valor. */
+  externalReference: string | null
   url: string
 }
 
@@ -175,6 +177,44 @@ export interface CommitSummary {
   webUrl: string
 }
 
+/** Por qué un commit aparece en el historial del work item. */
+export type WorkItemCommitSource =
+  /** Commit que forma parte de un PR vinculado. */
+  | { kind: 'pullRequest'; pullRequestId: number }
+  /** Commit con el que se completó un PR vinculado (merge o squash en la rama destino). */
+  | { kind: 'merge'; pullRequestId: number }
+  /** Commit vinculado directamente al work item (Development → Commit). */
+  | { kind: 'link' }
+
+export interface WorkItemCommit extends CommitSummary {
+  sources: WorkItemCommitSource[]
+}
+
+/**
+ * Rama relacionada con el work item: vinculada directamente, rama origen/destino de un PR (vinculado
+ * o que contiene un commit vinculado) o rama por defecto del repositorio de sus commits.
+ */
+export interface WorkItemBranch {
+  repositoryId: string
+  repositoryName: string
+  /** Sin `refs/heads/`. */
+  name: string
+  origin: 'link' | 'pullRequestSource' | 'pullRequestTarget' | 'repositoryDefault'
+  /** PR por los que se conoce la rama (vacío si solo está vinculada). */
+  pullRequestIds: number[]
+}
+
+export interface WorkItemCommits {
+  /** Del más reciente al más antiguo. */
+  commits: WorkItemCommit[]
+  /** Primero las vinculadas, luego las ramas origen y por último las destino. */
+  branches: WorkItemBranch[]
+  /** PR vinculados que se pudieron cargar (para enlazarlos y mostrar su estado de merge). */
+  pullRequests: PullRequestSummary[]
+  /** Avisos no fatales (PR o commits que no se pudieron cargar). */
+  notes: string[]
+}
+
 /** Pull request encontrado por número o por commit, con los work items que tiene vinculados. */
 export interface PullRequestMatch {
   pullRequest: PullRequestSummary
@@ -193,6 +233,7 @@ export type SearchKind =
   | 'parentWorkItems'
   | 'titlePattern'
   | 'externalReference'
+  | 'multiple'
 
 export interface SearchResult {
   kind: SearchKind
@@ -277,6 +318,10 @@ export interface AzdoApi {
   getWorkItemComments(id: number): Promise<IpcResult<WorkItemComment[]>>
   /** Revisiones del work item (cambios de campos, links y comentarios), de la más reciente a la más antigua. */
   getWorkItemHistory(id: number): Promise<IpcResult<WorkItemRevision[]>>
+  /** Commits de los PR vinculados, sus merges y los commits vinculados, con las ramas relacionadas. */
+  getWorkItemCommits(id: number): Promise<IpcResult<WorkItemCommits>>
+  /** De `commitIds` (todos del repositorio), los que son alcanzables desde la rama `branch`. */
+  getCommitsInBranch(repositoryId: string, branch: string, commitIds: string[]): Promise<IpcResult<string[]>>
   /** Publica un comentario (HTML, con menciones) en la sección Discussion. */
   addWorkItemComment(id: number, html: string): Promise<IpcResult<null>>
   /** Miembros de todos los equipos del proyecto (en caché unos minutos). */

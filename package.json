@@ -1,6 +1,6 @@
 {
   "name": "azdo-pr-viewer",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "Visor de escritorio de Pull Requests por Work Item de Azure DevOps (sda-iatec / Sda.Aasi.Net)",
   "main": "./out/main/index.js",
   "author": "MRC",

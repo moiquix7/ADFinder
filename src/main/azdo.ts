@@ -1,7 +1,7 @@
 import { PROJECT, WEB_HOST } from './config'
 import { api, AzdoHttpError, identity, isNotFound } from './http'
 import { findFieldByName, readWorkItemDetail } from './workItem'
-import { scopedSearch, titlePatternMatcher, wildcardSegments } from '../shared/query'
+import { MAX_MULTIPLE_TERMS, scopedSearch, titlePatternMatcher, wildcardSegments } from '../shared/query'
 import type {
   CommitSummary,
   PullRequestMatch,
@@ -13,6 +13,10 @@ import type {
   SearchOptions,
   SearchResult,
   SearchScope,
+  WorkItemBranch,
+  WorkItemCommit,
+  WorkItemCommits,
+  WorkItemCommitSource,
   WorkItemDetail,
   WorkItemSummary
 } from '../shared/types'
@@ -22,8 +26,19 @@ function wiqlLiteral(value: string): string {
   return value.split("'").join("''")
 }
 
-function mapWorkItem(item: { id: number; fields: Record<string, unknown> }): WorkItemSummary {
+/** Nombre de referencia del campo External Reference (p. ej. `Custom.ExternalReference`), o null si no existe. */
+async function externalReferenceRefName(): Promise<string | null> {
+  const field = await findFieldByName(EXTERNAL_REFERENCE_FIELD_NAME).catch(() => null)
+  return field?.referenceName ?? null
+}
+
+function mapWorkItem(
+  item: { id: number; fields: Record<string, unknown> },
+  externalRefName: string | null
+): WorkItemSummary {
   const assigned = identity(item.fields['System.AssignedTo'])
+  const external = externalRefName ? item.fields[externalRefName] : undefined
+  const externalReference = external === undefined || external === null ? '' : String(external).trim()
   return {
     id: item.id,
     title: String(item.fields['System.Title'] ?? '(sin título)'),
@@ -32,6 +47,7 @@ function mapWorkItem(item: { id: number; fields: Record<string, unknown> }): Wor
     assignedTo: assigned.name || null,
     assignedToImageUrl: assigned.imageUrl,
     changedDate: (item.fields['System.ChangedDate'] as string | undefined) ?? null,
+    externalReference: externalReference || null,
     url: `${WEB_HOST}/${encodeURIComponent(PROJECT)}/_workitems/edit/${item.id}`
   }
 }
@@ -76,15 +92,17 @@ async function getWorkItemSummaries(ids: number[]): Promise<WorkItemSummary[]> {
 async function getWorkItemBatch(ids: number[]): Promise<WorkItemSummary[]> {
   if (ids.length === 0) return []
 
+  const externalRefName = await externalReferenceRefName()
+  const fields = externalRefName ? [...WORK_ITEM_FIELDS, externalRefName] : WORK_ITEM_FIELDS
   const batch = await api<{ value: ({ id: number; fields: Record<string, unknown> } | null)[] }>(
     '/_apis/wit/workitemsbatch',
-    { method: 'POST', body: { ids, fields: WORK_ITEM_FIELDS, errorPolicy: 'omit' } }
+    { method: 'POST', body: { ids, fields, errorPolicy: 'omit' } }
   )
 
   const byId = new Map(
     batch.value
       .filter((item): item is { id: number; fields: Record<string, unknown> } => item !== null)
-      .map((item) => [item.id, mapWorkItem(item)])
+      .map((item) => [item.id, mapWorkItem(item, externalRefName)])
   )
   return ids.map((id) => byId.get(id)).filter((w): w is WorkItemSummary => Boolean(w))
 }
@@ -264,6 +282,7 @@ async function searchAttachments(
   const ids = (await runWiql('[System.AttachedFileCount] > 0', types, scanLimit)).map((w) => w.id)
   const needle = text.toLowerCase()
   const wanted = limit === null ? Infinity : limit + 1
+  const externalRefName = await externalReferenceRefName()
 
   const chunks: number[][] = []
   for (let i = 0; i < ids.length; i += BATCH_SIZE) chunks.push(ids.slice(i, i + BATCH_SIZE))
@@ -282,7 +301,7 @@ async function searchAttachments(
       )
     )
     for (const item of batches.flatMap((batch) => batch.value)) {
-      if (item && attachmentMatches(item, needle)) matches.push(mapWorkItem(item))
+      if (item && attachmentMatches(item, needle)) matches.push(mapWorkItem(item, externalRefName))
     }
     scanned += wave.reduce((sum, chunk) => sum + chunk.length, 0)
   }
@@ -455,7 +474,7 @@ export async function getWorkItemWithPullRequests(id: number): Promise<WorkItemD
     return workItem ? [{ relation: ref.relation, workItem }] : []
   })
 
-  return { workItem: mapWorkItem(raw), ...extras, links, relatedLinks, pullRequests, unresolved }
+  return { workItem: mapWorkItem(raw, await externalReferenceRefName()), ...extras, links, relatedLinks, pullRequests, unresolved }
 }
 
 
@@ -504,6 +523,8 @@ interface RawRepository {
   id: string
   name: string
   isDisabled?: boolean
+  /** `refs/heads/…`; falta en repositorios vacíos. */
+  defaultBranch?: string
 }
 
 const REPO_CACHE_MS = 5 * 60_000
@@ -790,6 +811,57 @@ async function listParentWorkItems(
   return { workItems, hasMore, truncated: false }
 }
 
+/** Búsquedas de una lista con comas que se lanzan a la vez (cada una puede hacer varias peticiones). */
+const MULTIPLE_CONCURRENCY = 4
+
+/**
+ * Busca cada valor de una lista por separado y une los resultados en el orden de la lista, sin
+ * repetir work items, PR ni commits. Los avisos se agrupan por texto indicando a qué valores aplican.
+ */
+async function searchMultiple(terms: string[], options: SearchOptions): Promise<SearchResult> {
+  const searched = terms.slice(0, MAX_MULTIPLE_TERMS)
+  const results = await mapLimit(searched, MULTIPLE_CONCURRENCY, (term) => search(term, options))
+
+  const workItems = new Map<number, WorkItemSummary>()
+  const pullRequests = new Map<number, PullRequestMatch>()
+  const commits = new Map<string, CommitSummary>()
+  const notesByText = new Map<string, string[]>()
+  let hasMoreWorkItems = false
+  let hasMorePullRequests = false
+
+  results.forEach((result, index) => {
+    for (const item of result.workItems) if (!workItems.has(item.id)) workItems.set(item.id, item)
+    for (const match of result.pullRequests) {
+      const id = match.pullRequest.pullRequestId
+      if (!pullRequests.has(id)) pullRequests.set(id, match)
+    }
+    for (const commit of result.commits) {
+      const key = `${commit.repositoryId}/${commit.commitId}`
+      if (!commits.has(key)) commits.set(key, commit)
+    }
+    for (const note of result.notes) notesByText.set(note, [...(notesByText.get(note) ?? []), searched[index]])
+    hasMoreWorkItems ||= result.hasMoreWorkItems
+    hasMorePullRequests ||= result.hasMorePullRequests
+  })
+
+  const notes = [...notesByText].map(([note, noteTerms]) => `${noteTerms.map((term) => `«${term}»`).join(', ')}: ${note}`)
+  if (terms.length > MAX_MULTIPLE_TERMS) {
+    notes.unshift(
+      `Se buscaron solo los primeros ${MAX_MULTIPLE_TERMS} valores de ${terms.length}; divide la lista para buscar el resto.`
+    )
+  }
+
+  return {
+    kind: 'multiple',
+    workItems: [...workItems.values()],
+    hasMoreWorkItems,
+    pullRequests: [...pullRequests.values()],
+    hasMorePullRequests,
+    commits: [...commits.values()],
+    notes
+  }
+}
+
 /** Punto de entrada único: decide qué buscar a partir del término y del filtro. */
 export async function search(term: string, options: SearchOptions): Promise<SearchResult> {
   const { scope } = options
@@ -806,6 +878,9 @@ export async function search(term: string, options: SearchOptions): Promise<Sear
   switch (query.kind) {
     case 'empty':
       return { kind: 'text', ...empty }
+
+    case 'multiple':
+      return searchMultiple(query.terms, options)
 
     case 'allPullRequests': {
       const limit = options.allWorkItems ? MAX_PULL_REQUEST_LIMIT : DEFAULT_PULL_REQUEST_LIMIT
@@ -912,5 +987,236 @@ export async function search(term: string, options: SearchOptions): Promise<Sear
 
       return { kind: 'commit', ...empty, commits, pullRequests, notes }
     }
+  }
+}
+
+/* ---------- Historial de commits del work item ---------- */
+
+/** Tope de commits que se piden por PR (la API pagina; un PR con más es muy raro). */
+const PULL_REQUEST_COMMITS_TOP = 1000
+
+/** `lastMergeCommit` en un PR completado es el commit con el que entró en la rama destino. */
+interface RawPullRequestWithMerge extends RawPullRequest {
+  lastMergeCommit?: { commitId: string }
+}
+
+interface GitArtifact {
+  type: string
+  repositoryId: string
+  id: string
+}
+
+function decodeSafely(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+/** `vstfs:///Git/{tipo}/{proyecto}%2F{repo}%2F{id}`; el id de una rama puede ir codificado otra vez. */
+function parseGitArtifact(url: string): GitArtifact | null {
+  const match = /^vstfs:\/\/\/Git\/(\w+)\/(.+)$/i.exec(url)
+  if (!match) return null
+  const [, repositoryId = '', ...rest] = decodeSafely(match[2]).split('/')
+  const id = decodeSafely(rest.join('/'))
+  return repositoryId && id ? { type: match[1].toLowerCase(), repositoryId, id } : null
+}
+
+const BRANCH_ORDER: WorkItemBranch['origin'][] = ['link', 'pullRequestSource', 'pullRequestTarget', 'repositoryDefault']
+
+function sameSource(a: WorkItemCommitSource, b: WorkItemCommitSource): boolean {
+  if (a.kind === 'link' || b.kind === 'link') return a.kind === b.kind
+  return a.kind === b.kind && a.pullRequestId === b.pullRequestId
+}
+
+/**
+ * Commits relacionados con el work item: los de cada PR vinculado, el commit con el que se
+ * completó cada PR (merge o squash en la rama destino) y los vinculados directamente. Junto a
+ * ellos, las ramas relacionadas (vinculadas y origen/destino de los PR) para filtrar por rama.
+ */
+export async function getWorkItemCommits(id: number): Promise<WorkItemCommits> {
+  const raw = await api<RawWorkItem>(`/_apis/wit/workitems/${id}`, { query: { $expand: 'relations' } })
+  const artifacts = (raw.relations ?? [])
+    .filter((rel) => rel.rel === 'ArtifactLink')
+    .map((rel) => parseGitArtifact(rel.url))
+    .filter((artifact): artifact is GitArtifact => artifact !== null)
+
+  const repos = await listRepositories().catch(() => [] as RawRepository[])
+  const repoById = new Map(repos.map((repo) => [repo.id.toLowerCase(), repo]))
+  const repoFor = (repositoryId: string): RawRepository =>
+    repoById.get(repositoryId.toLowerCase()) ?? { id: repositoryId, name: repositoryId }
+
+  const notes: string[] = []
+  const commits = new Map<string, WorkItemCommit>()
+  const addCommit = (commit: CommitSummary, source: WorkItemCommitSource) => {
+    const key = `${commit.repositoryId.toLowerCase()}/${commit.commitId.toLowerCase()}`
+    const existing = commits.get(key)
+    if (!existing) commits.set(key, { ...commit, sources: [source] })
+    else if (!existing.sources.some((s) => sameSource(s, source))) existing.sources.push(source)
+  }
+
+  const branches = new Map<string, WorkItemBranch>()
+  const addBranch = (repo: RawRepository, name: string, origin: WorkItemBranch['origin'], pullRequestId?: number) => {
+    const key = `${repo.id.toLowerCase()}/${name}`
+    const existing = branches.get(key)
+    if (!existing) {
+      branches.set(key, {
+        repositoryId: repo.id,
+        repositoryName: repo.name,
+        name,
+        origin,
+        pullRequestIds: pullRequestId === undefined ? [] : [pullRequestId]
+      })
+      return
+    }
+    // Se queda el origen más relevante (vinculada > origen de PR > destino de PR > por defecto).
+    if (BRANCH_ORDER.indexOf(origin) < BRANCH_ORDER.indexOf(existing.origin)) existing.origin = origin
+    if (pullRequestId !== undefined && !existing.pullRequestIds.includes(pullRequestId)) {
+      existing.pullRequestIds.push(pullRequestId)
+    }
+  }
+
+  // GB = rama; los tags (GT) y commits (GC) vinculados como Ref no sirven para filtrar.
+  for (const ref of artifacts.filter((artifact) => artifact.type === 'ref' && artifact.id.startsWith('GB'))) {
+    addBranch(repoFor(ref.repositoryId), ref.id.slice(2), 'link')
+  }
+
+  const pullRequests = await mapLimit(
+    artifacts.filter((artifact) => artifact.type === 'pullrequestid'),
+    6,
+    async (ref) => {
+      try {
+        return await api<RawPullRequestWithMerge>(
+          `/_apis/git/repositories/${ref.repositoryId}/pullrequests/${encodeURIComponent(ref.id)}`
+        )
+      } catch {
+        notes.push(`No se pudo cargar el pull request !${ref.id} (repositorio eliminado o sin permisos).`)
+        return null
+      }
+    }
+  )
+
+  await mapLimit(
+    pullRequests.filter((pr): pr is RawPullRequestWithMerge => pr !== null),
+    4,
+    async (pr) => {
+      const repo = repoFor(pr.repository.id)
+      const prId = pr.pullRequestId
+      addBranch(repo, shortBranch(pr.sourceRefName), 'pullRequestSource', prId)
+      addBranch(repo, shortBranch(pr.targetRefName), 'pullRequestTarget', prId)
+
+      try {
+        const list = await api<{ value: RawCommit[] }>(
+          `/_apis/git/repositories/${repo.id}/pullRequests/${prId}/commits`,
+          { query: { $top: PULL_REQUEST_COMMITS_TOP } }
+        )
+        for (const commit of list.value) {
+          addCommit(mapCommit(commit, repo), { kind: 'pullRequest', pullRequestId: prId })
+        }
+        if (list.value.length >= PULL_REQUEST_COMMITS_TOP) {
+          notes.push(
+            `El pull request !${prId} tiene más de ${PULL_REQUEST_COMMITS_TOP} commits; solo se muestran los primeros.`
+          )
+        }
+      } catch {
+        notes.push(`No se pudieron cargar los commits del pull request !${prId}.`)
+      }
+
+      // En un PR activo `lastMergeCommit` es el merge de prueba, no un commit real de la rama destino.
+      if (pr.status === 'completed' && pr.lastMergeCommit) {
+        const merge = await getCommit(repo, pr.lastMergeCommit.commitId)
+        if (merge) addCommit(merge, { kind: 'merge', pullRequestId: prId })
+      }
+    }
+  )
+
+  await mapLimit(
+    artifacts.filter((artifact) => artifact.type === 'commit'),
+    6,
+    async (ref) => {
+      const commit = await getCommit(repoFor(ref.repositoryId), ref.id)
+      if (commit) addCommit(commit, { kind: 'link' })
+      else notes.push(`No se pudo cargar el commit vinculado ${ref.id.slice(0, 8)}.`)
+    }
+  )
+
+  // Un commit vinculado sin PR vinculado: se buscan los PR que lo contienen (o cuyo merge es él)
+  // para mostrar su PR y conocer sus ramas origen y destino.
+  const loaded = new Map<number, RawPullRequestWithMerge>()
+  for (const pr of pullRequests) if (pr) loaded.set(pr.pullRequestId, pr)
+  const orphans = [...commits.values()].filter((commit) => commit.sources.every((source) => source.kind === 'link'))
+  await mapLimit(orphans, 4, async (commit) => {
+    let found: RawPullRequestWithMerge[]
+    try {
+      found = (await findPullRequestsForCommit(commit)) as RawPullRequestWithMerge[]
+    } catch {
+      notes.push(`No se pudieron buscar los pull requests del commit ${commit.shortId}.`)
+      return
+    }
+    for (const pr of found) {
+      const prId = pr.pullRequestId
+      if (!loaded.has(prId)) loaded.set(prId, pr)
+      const isMerge = pr.lastMergeCommit?.commitId.toLowerCase() === commit.commitId.toLowerCase()
+      addCommit(commit, { kind: isMerge ? 'merge' : 'pullRequest', pullRequestId: prId })
+      const repo = repoFor(pr.repository.id)
+      addBranch(repo, shortBranch(pr.sourceRefName), 'pullRequestSource', prId)
+      addBranch(repo, shortBranch(pr.targetRefName), 'pullRequestTarget', prId)
+    }
+  })
+
+  // La rama por defecto de cada repositorio con commits siempre se puede elegir (p. ej. sin PR).
+  for (const repositoryId of new Set([...commits.values()].map((commit) => commit.repositoryId.toLowerCase()))) {
+    const repo = repoById.get(repositoryId)
+    if (repo?.defaultBranch) addBranch(repo, shortBranch(repo.defaultBranch), 'repositoryDefault')
+  }
+
+  const sortedCommits = [...commits.values()].sort((a, b) =>
+    (b.authorDate ?? '').localeCompare(a.authorDate ?? '')
+  )
+  const sortedBranches = [...branches.values()].sort(
+    (a, b) =>
+      BRANCH_ORDER.indexOf(a.origin) - BRANCH_ORDER.indexOf(b.origin) ||
+      a.repositoryName.localeCompare(b.repositoryName) ||
+      a.name.localeCompare(b.name)
+  )
+  const loadedPullRequests = [...loaded.values()].map(mapPullRequest)
+  return { commits: sortedCommits, branches: sortedBranches, pullRequests: loadedPullRequests, notes }
+}
+
+/** Tope de commits que se comprueban en una rama de una vez (una petición por commit). */
+const BRANCH_CHECK_LIMIT = 2000
+
+/**
+ * De `commitIds`, los que están en la rama: un commit está en la rama si es antecesor de su
+ * punta, es decir, si el ancestro común entre el commit y la rama es el propio commit.
+ */
+export async function getCommitsInBranch(
+  repositoryId: string,
+  branch: string,
+  commitIds: string[]
+): Promise<string[]> {
+  const ids = [...new Set(commitIds)].slice(0, BRANCH_CHECK_LIMIT)
+  try {
+    const found = await mapLimit(ids, 8, async (commitId) => {
+      const diff = await api<{ commonCommit?: string }>(
+        `${projectPath}/_apis/git/repositories/${encodeURIComponent(repositoryId)}/diffs/commits`,
+        {
+          query: {
+            baseVersion: commitId,
+            baseVersionType: 'commit',
+            targetVersion: branch,
+            targetVersionType: 'branch',
+            diffCommonCommit: 'true',
+            $top: 1
+          }
+        }
+      )
+      return diff.commonCommit?.toLowerCase() === commitId.toLowerCase() ? commitId : null
+    })
+    return found.filter((commitId): commitId is string => commitId !== null)
+  } catch (error) {
+    if (isNotFound(error)) throw new Error(`La rama «${branch}» ya no existe en el repositorio.`)
+    throw error
   }
 }
