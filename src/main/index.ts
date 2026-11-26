@@ -11,7 +11,7 @@ import {
   type MenuItemConstructorOptions
 } from 'electron'
 import { currentState, onAuthChange, restoreSession, signIn, signOut } from './auth'
-import { getWorkItemWithPullRequests, search } from './azdo'
+import { getCommitsInBranch, getWorkItemCommits, getWorkItemWithPullRequests, search } from './azdo'
 import { addWorkItemComment, getWorkItemComments, getWorkItemHistory, isOrganizationUrl } from './workItem'
 import { downloadToFile, requestScope } from './http'
 import { listCollaborators, searchCollaborators } from './people'
@@ -207,6 +207,18 @@ function registerIpc(): void {
   ipcMain.handle('azdo:workItemComments', (_event, id: number) => guard(() => getWorkItemComments(id)))
 
   ipcMain.handle('azdo:workItemHistory', (_event, id: number) => guard(() => getWorkItemHistory(id)))
+
+  ipcMain.handle('azdo:workItemCommits', (_event, id: number) => guard(() => getWorkItemCommits(id)))
+
+  ipcMain.handle('azdo:commitsInBranch', (_event, repositoryId: string, branch: string, commitIds: string[]) =>
+    guard(() =>
+      getCommitsInBranch(
+        String(repositoryId),
+        String(branch),
+        Array.isArray(commitIds) ? commitIds.filter((id) => typeof id === 'string' && /^[0-9a-f]{40}$/i.test(id)) : []
+      )
+    )
+  )
 
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     if (isHttpUrl(url)) await shell.openExternal(url)

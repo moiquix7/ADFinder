@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Avatar } from './Avatar'
 import { PullRequestList } from './PullRequestList'
 import { WorkItemAttachments } from './WorkItemAttachments'
+import { WorkItemCommitHistory } from './WorkItemCommits'
 import { WorkItemDetails } from './WorkItemDetails'
 import { WorkItemRelatedLinks, relatedPullRequests } from './WorkItemRelatedLinks'
 import { WorkItemDiscussion, WorkItemHistory, type Loadable } from './WorkItemActivity'
 import {
   BackIcon,
   CommentIcon,
+  CommitIcon,
   ExternalIcon,
   HistoryIcon,
   InfoIcon,
@@ -20,9 +22,9 @@ import { formatAbsolute, formatRelative } from '../lib/format'
 import { typeStyle } from '../lib/workItemType'
 import type { IpcResult, WorkItemDetail, WorkItemSummary } from '../../shared/types'
 
-type Tab = 'details' | 'pullRequests' | 'discussion' | 'attachments' | 'relatedLinks' | 'history'
+type Tab = 'details' | 'pullRequests' | 'commits' | 'discussion' | 'attachments' | 'relatedLinks' | 'history'
 
-const TABS: Tab[] = ['details', 'pullRequests', 'discussion', 'attachments', 'relatedLinks', 'history']
+const TABS: Tab[] = ['details', 'pullRequests', 'commits', 'discussion', 'attachments', 'relatedLinks', 'history']
 const TAB_KEY = 'workItemPanel.tab'
 
 function loadTab(): Tab {
@@ -84,6 +86,7 @@ function useLazy<T>(
 
 const loadComments = (id: number) => window.azdo.getWorkItemComments(id)
 const loadHistory = (id: number) => window.azdo.getWorkItemHistory(id)
+const loadCommits = (id: number) => window.azdo.getWorkItemCommits(id)
 
 interface WorkItemPanelProps {
   /** Work item abierto; se muestra en la cabecera mientras carga su detalle. */
@@ -118,6 +121,7 @@ export function WorkItemPanel({
   const [tab, setTab] = useState<Tab>(loadTab)
   const comments = useLazy(detail, tab === 'discussion', loadComments)
   const history = useLazy(detail, tab === 'history', loadHistory)
+  const commits = useLazy(detail, tab === 'commits', loadCommits)
 
   const changeTab = (next: Tab) => {
     setTab(next)
@@ -148,6 +152,13 @@ export function WorkItemPanel({
       short: 'PRs',
       icon: <PullRequestIcon />,
       count: detail?.pullRequests.length
+    },
+    {
+      value: 'commits',
+      label: 'Historial de commits',
+      short: 'Commits',
+      icon: <CommitIcon />,
+      count: commits.data?.commits.length
     },
     {
       value: 'discussion',
@@ -280,6 +291,7 @@ export function WorkItemPanel({
         <>
           {tab === 'details' && <WorkItemDetails detail={detail} />}
           {tab === 'pullRequests' && <PullRequestList key={detail.workItem.id} detail={detail} />}
+          {tab === 'commits' && <WorkItemCommitHistory key={detail.workItem.id} state={commits} />}
           {tab === 'discussion' && (
             <WorkItemDiscussion
               state={comments}

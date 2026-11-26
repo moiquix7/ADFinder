@@ -10,6 +10,7 @@ import {
   type SearchResult,
   type ThemeMode,
   type WorkItemComment,
+  type WorkItemCommits,
   type WorkItemDetail,
   type WorkItemRevision
 } from '../shared/types'
@@ -40,6 +41,10 @@ const api: AzdoApi = {
     ipcRenderer.invoke('azdo:workItemComments', id) as Promise<IpcResult<WorkItemComment[]>>,
   getWorkItemHistory: (id) =>
     ipcRenderer.invoke('azdo:workItemHistory', id) as Promise<IpcResult<WorkItemRevision[]>>,
+  getWorkItemCommits: (id) =>
+    ipcRenderer.invoke('azdo:workItemCommits', id) as Promise<IpcResult<WorkItemCommits>>,
+  getCommitsInBranch: (repositoryId, branch, commitIds) =>
+    ipcRenderer.invoke('azdo:commitsInBranch', repositoryId, branch, commitIds) as Promise<IpcResult<string[]>>,
   addWorkItemComment: (id, html) =>
     ipcRenderer.invoke('azdo:addWorkItemComment', id, html) as Promise<IpcResult<null>>,
   getCollaborators: () => ipcRenderer.invoke('azdo:collaborators') as Promise<IpcResult<Collaborator[]>>,
